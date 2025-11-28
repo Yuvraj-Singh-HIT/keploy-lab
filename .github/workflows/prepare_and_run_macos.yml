@@ -1,0 +1,242 @@
+name: Prepare Binary and Run Workflows (macOS)
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # push:
+  #   branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-upload:
+    runs-on: [self-hosted, macOS, native]
+    if: ${{ (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    steps:
+      - name: Clean up git config
+        if: always()
+        continue-on-error: true
+        run: |
+          rm -rf ~/.gitconfig
+      
+      - name: Create workflow start lock
+        run: |
+          LOCK_DIR="$HOME/.github-workflow-locks"
+          mkdir -p "$LOCK_DIR"
+          echo "started-$(date +%s)" > "$LOCK_DIR/prepare-macos-workflow-${{ github.run_id }}.lock"
+          echo "Created workflow lock file: $LOCK_DIR/prepare-macos-workflow-${{ github.run_id }}.lock"
+      
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+    
+      - name: Add Private Parsers
+        uses: ./.github/actions/setup-private-parsers
+        with:
+          ssh-private-key: ${{ secrets.INTEGRATIONS_REPO_DEPLOY_KEY_PRIVATE }}
+          go-cache: false
+
+      - name: Build Keploy - macOS (darwin/arm64)
+        run: |
+          GOOS=darwin GOARCH=arm64 go build -tags=viper_bind_struct -ldflags="-X main.version=${{ github.sha }}" -o keploy
+      - uses: actions/upload-artifact@v4
+        with: { name: build, path: keploy }
+
+  # upload-latest:
+  #   runs-on: [self-hosted, macOS, native]
+  #   steps:
+  #     - name: Download latest release (macOS)
+  #       run: |
+  #         LATEST=$(curl -s https://api.github.com/repos/keploy/keploy/releases/latest | jq -r .tag_name)
+  #         URL="https://github.com/keploy/keploy/releases/download/${LATEST}/keploy_darwin_all.tar.gz"
+  #         curl -L "$URL" -o keploy.tar.gz
+  #         tar -xzf keploy.tar.gz
+  #         chmod +x keploy
+
+  #     - uses: actions/upload-artifact@v4
+  #       with: { name: latest, path: keploy }
+
+  #     - name: Clean up git config
+  #       if: always() # This ensures the step runs even if previous steps fail
+  #       continue-on-error: true
+  #       run: |
+  #         git config --global --unset url."git@github.com:".insteadOf
+
+  # Build docker image on Ubuntu and push to registry
+  build-docker-image:
+    if: ${{ (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+      image_digest: ${{ steps.digest.outputs.image_digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add Private Parsers
+        uses: ./.github/actions/setup-private-parsers
+        with:
+          ssh-private-key: ${{ secrets.INTEGRATIONS_REPO_DEPLOY_KEY_PRIVATE }}
+          go-cache: true
+      
+      - name: Build and push Docker image
+        run: |
+          source ./.github/workflows/test_workflow_scripts/update-docker-mac.sh
+
+      - name: Make unique tag for this run
+        id: tag
+        run: |
+          IMAGE_TAG="ttl.sh/keploy/keploy:arm-${GITHUB_SHA}-1h"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          docker image inspect ttl.sh/keploy/keploy:1h > /dev/null
+          docker tag ttl.sh/keploy/keploy:1h "$IMAGE_TAG"
+
+      - name: Push unique tag
+        run: |
+          docker push "${{ steps.tag.outputs.image_tag }}"
+          
+      - name: Clean up git config
+        if: always() # This ensures the step runs even if previous steps fail
+        continue-on-error: true
+        run: |
+          git config --global --unset url."git@github.com:".insteadOf
+
+  pull-docker-image:
+    if: ${{ (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    runs-on: [self-hosted, macOS, native]
+    needs: [build-docker-image]
+    
+    steps:
+      - name: Unlock keychain
+        if: runner.os == 'macOS'
+        run: |
+          security unlock-keychain -p $KEYCHAIN_PASSWORD
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.MAC_RUNNER_USER_PASSWORD }}
+          
+      - name: Pull Docker image
+        run: |
+          docker pull ${{ needs.build-docker-image.outputs.image_tag }}
+
+  run_python_docker_macos:
+    needs: [build-and-upload, pull-docker-image, build-docker-image]
+    uses: ./.github/workflows/python_docker_macos.yml
+    with:
+      image_tag: ${{ needs.build-docker-image.outputs.image_tag }}
+    secrets:
+      MAC_RUNNER_USER_PASSWORD: ${{ secrets.MAC_RUNNER_USER_PASSWORD }}
+
+  run_golang_docker_macos:
+    needs: [build-and-upload, pull-docker-image, build-docker-image]
+    uses: ./.github/workflows/golang_docker_macos.yml
+    with:
+      image_tag: ${{ needs.build-docker-image.outputs.image_tag }}
+    secrets:
+      MAC_RUNNER_USER_PASSWORD: ${{ secrets.MAC_RUNNER_USER_PASSWORD }}
+  
+  clean_up_docker_macos:
+    if: ${{ always() && ((github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
+    runs-on: [self-hosted, macOS, native]
+    needs: [run_python_docker_macos, run_golang_docker_macos]
+    steps:
+      - name: Unlock keychain
+        if: runner.os == 'macOS'
+        run: |
+          security unlock-keychain -p $KEYCHAIN_PASSWORD
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.MAC_RUNNER_USER_PASSWORD }}
+
+      - name: Remove workflow lock file
+        if: always()
+        run: |
+          LOCK_DIR="$HOME/.github-workflow-locks"
+          LOCK_FILE="$LOCK_DIR/prepare-macos-workflow-${{ github.run_id }}.lock"
+          
+          if [ -f "$LOCK_FILE" ]; then
+            echo "Removing workflow lock file: $LOCK_FILE"
+            rm -f "$LOCK_FILE"
+          else
+            echo "Lock file not found (may have been cleaned up already): $LOCK_FILE"
+          fi
+          
+          # Optional: Clean up old lock files (older than 24 hours)
+          echo "Cleaning up stale lock files older than 24 hours..."
+          find "$LOCK_DIR" -name "prepare-macos-workflow-*.lock" -type f -mtime +1 -delete 2>/dev/null || true
+
+      - name: Check for other running workflows
+        id: check_locks
+        run: |
+          LOCK_DIR="$HOME/.github-workflow-locks"
+          
+          # Count existing lock files excluding our own
+          LOCK_COUNT=$(ls -1 "$LOCK_DIR"/prepare-macos-workflow-*.lock 2>/dev/null | grep -v "${{ github.run_id }}" | wc -l | tr -d ' ')
+          
+          echo "lock_count=$LOCK_COUNT" >> $GITHUB_OUTPUT
+          echo "Found $LOCK_COUNT other running workflow(s)"
+          
+          if [ "$LOCK_COUNT" -gt 0 ]; then
+            echo "Other workflows are still running. Listing lock files:"
+            ls -lh "$LOCK_DIR"/prepare-macos-workflow-*.lock 2>/dev/null | grep -v "${{ github.run_id }}" || true
+          fi
+
+      - name: Stop long-running containers (macOS)
+        id: stop_longrunning
+        run: |
+          # Stop containers running longer than 30 minutes, except buildx-created containers
+          stopped_any=0
+          # Get current epoch seconds without python
+          now=$(date +%s)
+          while read -r cid cname; do
+            # Get started time in ISO format
+            started=$(docker inspect --format '{{.State.StartedAt}}' "$cid" 2>/dev/null || true)
+            if [ -z "$started" ]; then
+              continue
+            fi
+            # Normalize: remove fractional seconds, convert trailing Z to +0000, remove colon in timezone
+            started_norm=$(echo "$started" | sed -E 's/\.[0-9]+//; s/Z$/+0000/; s/([+-][0-9]{2}):([0-9]{2})$/\1\2/')
+            # Parse to epoch using BSD date (macOS) and handle failures
+            epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$started_norm" "+%s" 2>/dev/null || echo 0)
+            if [ -z "$epoch" ] || [ "$epoch" -eq 0 ]; then
+              echo "Could not parse start time for container $cid: $started"
+              continue
+            fi
+            if [ "$epoch" -lt $((now - 1800)) ]; then
+              # Skip buildx containers (common buildx prefix)
+              if [[ "$cname" == buildx* ]]; then
+                echo "Skipping buildx container $cid ($cname)"
+                continue
+              fi
+              echo "Removing long-running container $cid ($cname) started at $started"
+              docker rm -f "$cid" || true
+              stopped_any=1
+            fi
+          done < <(docker ps -a --format '{{.ID}} {{.Names}}')
+          echo "stopped_any=$stopped_any" >> $GITHUB_OUTPUT
+
+      - name: Docker Image Prune (unused only, wait if locked)
+        if: steps.check_locks.outputs.lock_count == '0' || steps.stop_longrunning.outputs.stopped_any == '1'
+        run: |
+          echo "No other workflows running. Proceeding with cleanup..."
+
+          # Stop running scripts 
+          pkill -9 -f "actions-runner-.*_work/keploy/keploy/.github/workflows/test_workflow_scripts/golang/echo_sql/golang-docker-macos\.sh" || true
+          
+          # Prune only dangling (untagged) images not in use
+          echo "Pruning Docker images..."
+          docker image prune -a -f
+          
+          # Prune dangling (unused) volumes as well
+          echo "Pruning Docker volumes..."
+          docker volume prune -a -f
+          
+          echo "Docker cleanup completed successfully"
+
+      - name: Skip cleanup - other workflows running
+        if: steps.check_locks.outputs.lock_count != '0' && steps.stop_longrunning.outputs.stopped_any != '1'
+        run: |
+          echo "⚠️ Skipping Docker cleanup - ${{ steps.check_locks.outputs.lock_count }} other workflow run(s) still in progress"
+          echo "This is expected behavior to prevent cleanup conflicts"
+
