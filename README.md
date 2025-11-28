@@ -279,45 +279,6 @@ Because Keploy intercepts at the **network layer (eBPF)**, it works with **any l
 
 ---
 
-## 🚀 Need Help Getting Started?
-
-<div align="center">
-
-### 📞 Book a Live Demo / Enterprise Support
-
-Want a **guided walkthrough**, **dedicated support**, or help planning **enterprise rollout**?
-
-[![Email](https://img.shields.io/badge/Email-sales@keploy.io-blue?style=for-the-badge&logo=gmail&logoColor=white)](mailto:sales@keploy.io)
-[![Calendar](https://img.shields.io/badge/Schedule-A_Meeting-green?style=for-the-badge&logo=google-calendar&logoColor=white)](https://calendly.com/keploy)
-
-*Prefer a calendar invite? Mention your availability in the email — we'll send one right away!*
-
-</div>
-
----
-
-## 🤝 Contributing
-
-We ❤️ contributions! Keploy is built by the community, for the community.
-
-<div align="center">
-
-[![Contributors](https://contrib.rocks/image?repo=keploy/keploy)](https://github.com/keploy/keploy/graphs/contributors)
-
-</div>
-
-### How to Contribute
-
-1. 🍴 **Fork** the repository
-2. 🌿 **Create** your feature branch (`git checkout -b feature/AmazingFeature`)
-3. 💾 **Commit** your changes (`git commit -m 'Add some AmazingFeature'`)
-4. 📤 **Push** to the branch (`git push origin feature/AmazingFeature`)
-5. 🔀 **Open** a Pull Request
-
-📜 Read our [Contribution Guidelines](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
-
----
-
 ## 📊 Project Stats
 
 <div align="center">
@@ -369,7 +330,7 @@ Keploy is licensed under the [Apache License 2.0](LICENSE).
 
 <div align="center">
 
-### Made with ❤️ by the Keploy Community
+### Created by Yuvraj Singh
 
 <a href="https://github.com/keploy/keploy">
   <img src="https://img.shields.io/badge/⭐_Star_Us_On_GitHub-Help_us_reach_20k_stars!-yellow?style=for-the-badge" alt="Star us on GitHub">
